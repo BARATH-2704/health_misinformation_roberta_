@@ -5,8 +5,11 @@ from transformers import RobertaTokenizer, RobertaModel
 from torch.utils.data import DataLoader, Dataset
 from torch.optim import AdamW
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, classification_report
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, roc_curve, auc
 from urllib.parse import urlparse
+import matplotlib.pyplot as plt
+import seaborn as sns
+import torch.nn.functional as F
 
 model = None
 tokenizer = None
@@ -36,7 +39,6 @@ class RobertaWithCredibility(nn.Module):
 
     def __init__(self):
         super().__init__()
-
         self.roberta = RobertaModel.from_pretrained("roberta-base")
         self.classifier = nn.Linear(769, 2)
 
@@ -46,7 +48,6 @@ class RobertaWithCredibility(nn.Module):
 
         pooled_output = outputs.last_hidden_state[:, 0, :]
 
-        # Ensure credibility tensor is correct shape and type
         credibility = credibility.float().unsqueeze(1)
 
         combined = torch.cat((pooled_output, credibility), dim=1)
@@ -54,6 +55,7 @@ class RobertaWithCredibility(nn.Module):
         logits = self.classifier(combined)
 
         return logits
+
 
 # ==========================
 # DATASET
@@ -83,7 +85,6 @@ class HealthDataset(Dataset):
         return item
 
     def __len__(self):
-
         return len(self.labels)
 
 
@@ -165,6 +166,7 @@ def train_model():
 
     preds = []
     labels = []
+    probs = []
 
     with torch.no_grad():
 
@@ -176,10 +178,13 @@ def train_model():
                 credibility=batch["credibility"]
             )
 
-            p = torch.argmax(logits, dim=1)
+            probabilities = F.softmax(logits, dim=1)
+
+            p = torch.argmax(probabilities, dim=1)
 
             preds.extend(p.tolist())
             labels.extend(batch["labels"].tolist())
+            probs.extend(probabilities[:,1].tolist())
 
     accuracy = accuracy_score(labels, preds)
 
@@ -189,7 +194,54 @@ def train_model():
 
     print(classification_report(labels, preds))
 
-    print("\n✅ Training completed. You can now detect news.\n")
+
+    # ==========================
+    # CONFUSION MATRIX
+    # ==========================
+
+    cm = confusion_matrix(labels, preds)
+
+    plt.figure(figsize=(6,5))
+
+    sns.heatmap(
+        cm,
+        annot=True,
+        fmt="d",
+        cmap="Blues",
+        xticklabels=["Real", "Fake"],
+        yticklabels=["Real", "Fake"]
+    )
+
+    plt.xlabel("Predicted Label")
+    plt.ylabel("Actual Label")
+    plt.title("Confusion Matrix - Health Misinformation Detection")
+
+    plt.show()
+
+
+    # ==========================
+    # ROC CURVE
+    # ==========================
+
+    fpr, tpr, thresholds = roc_curve(labels, probs)
+
+    roc_auc = auc(fpr, tpr)
+
+    plt.figure(figsize=(6,5))
+
+    plt.plot(fpr, tpr, label=f"ROC Curve (AUC = {roc_auc:.2f})")
+
+    plt.plot([0,1], [0,1], linestyle="--")
+
+    plt.xlabel("False Positive Rate")
+    plt.ylabel("True Positive Rate")
+    plt.title("ROC Curve - Health Misinformation Detection")
+
+    plt.legend()
+
+    plt.show()
+
+    print("\n✅ Training completed. Graphs generated.\n")
 
 
 # ==========================
@@ -201,7 +253,6 @@ def detect_news():
     global model, tokenizer
 
     if model is None:
-
         print("\n⚠ Train the model first (Option 1)\n")
         return
 
@@ -254,18 +305,14 @@ while True:
     choice = input("\nEnter choice: ")
 
     if choice == "1":
-
         train_model()
 
     elif choice == "2":
-
         detect_news()
 
     elif choice == "3":
-
         print("\nExiting program...\n")
         break
 
     else:
-
-        print("\nInvalid option \n")
+        print("\nInvalid option\n")
